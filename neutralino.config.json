@@ -15,6 +15,13 @@
     "filesystem.readFile",
     "window.*"
   ],
+  "extensions": [
+    {
+      "id": "serial-input-python",
+      "path": "python3",
+      "arguments": ["--py", "/extensions/serial-input-python/main.py"]
+    }
+  ],
   "singlePageServe": true,
   "modes": {
     "window": {

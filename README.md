@@ -35,6 +35,38 @@ Start the React development server and Neutralinojs app:
 neu run
 ```
 
+### Serial input Python extension
+
+The Neutralino extension under `extensions/serial-input-python/` streams
+serial frames into the dashboard:
+
+```bash
+cd extensions/serial-input-python
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+# Run standalone for quick checks (Neutralino will spawn it automatically during neu run/build)
+python main.py
+```
+
+To load the extension while developing the app, ensure `neu run` is executed
+from the repository root so `neutralino.config.json` can find the Python
+handler (`python3 --py /extensions/serial-input-python/main.py`).
+
+The extension accepts dispatch commands like `start`, `stop`, `configure`,
+`health`, and `read` via `Neutralino.extensions.dispatch("serial-input-python", ...)`.
+
+### Testing without hardware
+
+A small mock generator is available for loopback testing:
+
+```bash
+cd extensions/serial-input-python
+python mock_serial_generator.py --port loop:// --id demo --interval 0.5
+```
+
+Point the UI at the same serial URL/port (default baud `115200`) and watch
+values stream into the widget board.
+
 ## How to bundle the app
 
 Trigger a new React build and create the application bundle with the following command:

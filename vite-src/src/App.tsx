@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { WINDOW_KEY, LAYOUT_KEY, VARS_CONFIG_KEY, VARS_CONFIG_PATH_KEY } from "./constants";
 import { getNeu, hasNeuWindow, safeGetData, safeSetData, safeRemoveData } from "./system";
 import { WidgetBoard, VarSpec, withPlaceholderFallback, parseVarSpecs} from "./components/WidgetBoard";
+import { initSerialBridge, startSerial, stopSerial, checkSerialHealth } from "./serialBridge";
+import { useSerialState } from "./variableStore";
 
 /**
  * Draggable + resizable widgets dashboard with persistent layout.
@@ -64,11 +66,22 @@ export default function App() {
   const [widgets, setWidgets] = useState<Widget[]>([]);
   const [initialized, setInitialized] = useState(false);
 
+  const serialState = useSerialState();
+  const [portInput, setPortInput] = useState("");
+
   const webFileRef = useRef<HTMLInputElement>(null);
 
   const [varSpecs, setVarSpecs] = useState<VarSpec[]>(() =>
     withPlaceholderFallback([])
   );
+
+  useEffect(() => {
+    initSerialBridge();
+  }, []);
+
+  useEffect(() => {
+    setPortInput(serialState.port || "");
+  }, [serialState.port]);
 
   const loadConfig = useCallback(async () => {
     const neu = getNeu();
@@ -113,6 +126,19 @@ export default function App() {
     };
     reader.readAsText(file);
   }, [setVarSpecs]);
+
+  const onStartSerial = useCallback(async () => {
+    await startSerial({ port: portInput || undefined });
+    await checkSerialHealth();
+  }, [portInput]);
+
+  const onStopSerial = useCallback(async () => {
+    await stopSerial();
+  }, []);
+
+  const onHealthCheck = useCallback(async () => {
+    await checkSerialHealth();
+  }, []);
 
   // Restore native window size (optional). Neutralino can also do this automatically via config.
   useEffect(() => {
@@ -190,12 +216,117 @@ export default function App() {
           </div>
         </div>
 
-        <div style={{ fontSize: 12, opacity: 0.8, textAlign: "right" }}>
+        <div style={{ fontSize: 12, opacity: 0.8, textAlign: "right", display: "flex", flexDirection: "column", gap: 6 }}>
           <div>
             Widgets: <b>{widgets.length}</b>
           </div>
           <div>
             Bounds: <b>{bounds.width}</b>×<b>{bounds.height}</b>
+          </div>
+          <div
+            style={{
+              marginTop: 6,
+              display: "flex",
+              gap: 8,
+              alignItems: "center",
+              justifyContent: "flex-end",
+              flexWrap: "wrap",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "6px 10px",
+                borderRadius: 10,
+                background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(255,255,255,0.12)",
+                minWidth: 220,
+              }}
+            >
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: 999,
+                  display: "inline-block",
+                  background:
+                    serialState.status === "connected"
+                      ? "#34d399"
+                      : serialState.status === "error"
+                        ? "#f87171"
+                        : "#fbbf24",
+                }}
+              />
+              <div style={{ display: "flex", flexDirection: "column", gap: 2, textAlign: "left" }}>
+                <div style={{ fontWeight: 600 }}>Serial: {serialState.status}</div>
+                <div style={{ opacity: 0.8 }}>
+                  Port: {portInput || "unset"}
+                  {serialState.lastUpdate ? ` · Updated ${new Date(serialState.lastUpdate).toLocaleTimeString()}` : ""}
+                </div>
+                {serialState.lastError ? (
+                  <div style={{ color: "#fca5a5" }}>Error: {serialState.lastError}</div>
+                ) : null}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                value={portInput}
+                onChange={(e) => setPortInput(e.target.value)}
+                placeholder="/dev/ttyUSB0"
+                style={{
+                  padding: "6px 8px",
+                  borderRadius: 8,
+                  border: "1px solid rgba(255,255,255,0.25)",
+                  background: "rgba(255,255,255,0.05)",
+                  color: "white",
+                  width: 140,
+                }}
+              />
+              <button
+                onClick={onStartSerial}
+                style={{
+                  fontSize: 12,
+                  padding: "6px 10px",
+                  borderRadius: 10,
+                  background: "rgba(52,211,153,0.20)",
+                  border: "1px solid rgba(52,211,153,0.60)",
+                  color: "white",
+                  cursor: "pointer",
+                }}
+              >
+                Start / Retry
+              </button>
+              <button
+                onClick={onStopSerial}
+                style={{
+                  fontSize: 12,
+                  padding: "6px 10px",
+                  borderRadius: 10,
+                  background: "rgba(248,113,113,0.15)",
+                  border: "1px solid rgba(248,113,113,0.50)",
+                  color: "white",
+                  cursor: "pointer",
+                }}
+              >
+                Stop
+              </button>
+              <button
+                onClick={onHealthCheck}
+                style={{
+                  fontSize: 12,
+                  padding: "6px 10px",
+                  borderRadius: 10,
+                  background: "rgba(96,165,250,0.18)",
+                  border: "1px solid rgba(96,165,250,0.60)",
+                  color: "white",
+                  cursor: "pointer",
+                }}
+              >
+                Health
+              </button>
+            </div>
           </div>
           <div style={{ marginTop: 6, display: "flex", gap: 10, justifyContent: "flex-end" }}>
             <button
@@ -218,7 +349,7 @@ export default function App() {
               Reset layout
             </button>
             <div>
-              <button 
+              <button
                 onClick={loadConfig}
                 style={{
                   fontSize: 12,
