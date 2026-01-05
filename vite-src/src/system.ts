@@ -1,9 +1,10 @@
 import { 
-  storage as NeuStorage, 
-  filesystem as NeuFilesystem, 
-  os as NeuOs, 
+  storage as NeuStorage,
+  filesystem as NeuFilesystem,
+  os as NeuOs,
   window as NeuWindow,
-  events as NeuEvents
+  events as NeuEvents,
+  extensions as NeuExtensions,
 } from "@neutralinojs/lib";
 
 namespace Neutralino {
@@ -12,6 +13,7 @@ namespace Neutralino {
   export const os = NeuOs;
   export const window = NeuWindow;
   export const events = NeuEvents;
+  export const extensions = NeuExtensions;
 }
 
 export function getNeu() {

@@ -6,6 +6,7 @@ import { useRef, useState, useEffect,
 import { VARS_CONFIG_KEY, VARS_CONFIG_PATH_KEY, LAYOUT_KEY, GAP, PAD } from "../constants";
 
 import { getNeu, safeGetData, safeSetData } from "../system";
+import { useSerialState } from "../variableStore";
 
 import { WidgetCard } from "./WidgetCard";
 import { 
@@ -426,9 +427,10 @@ export function WidgetBoard({
   bounds: { width: number, height: number }, 
   handledInitializedState?: Readonly<[boolean, StateFunc<boolean>]>
   handledWidgetsState?: Readonly<[Widget[], StateFunc<Widget[]>]>, 
-  handledVarState?: Readonly<[VarSpec[], StateFunc<VarSpec[]>]>, 
+  handledVarState?: Readonly<[VarSpec[], StateFunc<VarSpec[]>]>,
 }) {
   const valuesRef = useRef<Record<string, number>>({});
+  const serialState = useSerialState();
   const baseRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
   const [initialized, setInitialized] = handledInitializedState || useState(false);
   const [varSpecs, setVarSpecs] = handledVarState || useState<VarSpec[]>(() =>
@@ -461,6 +463,18 @@ export function WidgetBoard({
 
   const draggingId = dragRef.current?.id ?? null;
   const resizingId = resizeRef.current?.id ?? null;
+
+  useEffect(() => {
+    const values = serialState.values || {};
+    setWidgets((prev) =>
+      prev.map((w) => {
+        const live = values[w.id];
+        if (typeof live !== "number" || w.value === live) return w;
+        valuesRef.current[w.id] = live;
+        return { ...w, value: live };
+      })
+    );
+  }, [serialState.values, setWidgets]);
 
   useEffect(() => {
     (async () => {
