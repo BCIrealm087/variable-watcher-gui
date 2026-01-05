@@ -1,0 +1,6 @@
+[
+  { "id": "0", "label": "Torque", "unit": "Nm" },
+  { "id": "1", "label": "RPM", "unit": "RPM", "widget": "accelerometer" },
+  { "id": "2", "label": "Temp Inversor", "unit": "C" },
+  { "id": "3", "label": "Temp Motor", "unit": "C" }
+]
