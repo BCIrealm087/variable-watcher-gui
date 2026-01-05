@@ -1,3 +1,8 @@
+# Based on the Neutralinojs + Vite + React + Typescript template, whose setup can be found further below.
+
+Installing neutralinojs and following steps 7 and 8 of the Manual Setup is required for this project to work.
+The release binaries and resources can be prepared using neutralino's `neu build --release` cli command.
+
 # Neutralinojs + Vite + React + Typescript
 A simple [React](https://react.dev/) template for building [Neutralinojs](https://neutralino.js.org/) apps with [Vite](https://vitejs.dev/) as bundler and [Typescript](https://www.typescriptlang.org/)
 
