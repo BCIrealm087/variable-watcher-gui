@@ -13,6 +13,9 @@ neutralino.js
 *.log
 .tmp
 
+# Extensions
+__pycache__
+
 # From/for vite
 # Logs
 logs

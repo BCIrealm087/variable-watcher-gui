@@ -49,7 +49,7 @@ async function dispatch(event: string, data?: any): Promise<DispatchResult> {
   }
 
   try {
-    const res = (await neu.extensions.dispatch(EXTENSION_ID, event, data)) as DispatchResult;
+    const res: DispatchResult = (await neu.extensions.dispatch(EXTENSION_ID, event, data)) as any;
     if (res?.status) {
       updateConnection({
         status: res.status.status ?? res.status.state ?? "idle",

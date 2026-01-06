@@ -16,7 +16,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Mock serial data generator")
     parser.add_argument("--port", default="loop://", help="Serial port or pyserial URL (default: loop://)")
     parser.add_argument("--baud", type=int, default=115200, help="Baud rate (default: 115200)")
-    parser.add_argument("--id", default="temp", help="Variable id to emit")
+    parser.add_argument("--id", default="2", help="Variable id to emit")
     parser.add_argument("--interval", type=float, default=1.0, help="Seconds between frames")
     args = parser.parse_args()
 
