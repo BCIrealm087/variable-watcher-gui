@@ -1,15 +1,22 @@
-import { clamp, polarToCartesian, describeArc } from "./widget-common";
+import {
+  clamp, polarToCartesian, describeArc, 
+  isNonEmptyString, HighlightConditions, WidgetKind
+} from "./widget-common";
 
 export function AccelerometerWidget({
   unit,
   value,
   availableWidth,
   availableHeight,
+  highlight, 
+  scale
 }: {
-  unit: string|undefined;
+  unit?: string;
   value: number;
   availableWidth: number;
   availableHeight: number;
+  highlight: string;
+  scale: number;
 }) {
   const VIEW = 200;
 
@@ -161,17 +168,54 @@ export function AccelerometerWidget({
             <circle cx={cx} cy={cy} r={4} fill="rgba(0,0,0,0.30)" />
           </g>
 
-          <text x={cx} y={156} fill="rgba(255,255,255,0.92)" fontSize={22} fontWeight={800} textAnchor="middle">
+          <text x={cx} y={156} 
+            fill={highlight || "rgba(255,255,255,0.92)"} 
+            fontSize={22} fontWeight={800} textAnchor="middle"
+          >
             {Math.round(clampedValue)}
           </text>
           <text x={cx} y={172} fill="rgba(255,255,255,0.68)" fontSize={12} fontWeight={700} textAnchor="middle">
             {unit}
           </text>
           <text x={cx} y={186} fill="rgba(255,255,255,0.55)" fontSize={11} fontWeight={600} textAnchor="middle">
-            ×1000 scale
+            ×{`${scale}`} scale
           </text>
         </g>
       </svg>
     </div>
   );
+}
+
+export function parseAccelerometer(input: Record<string, unknown>): 
+  WidgetKind<'accelerometer', { scale: number }, { scale: number }>
+{
+  const id = isNonEmptyString(input.id) ? input.id.trim() : "";
+
+  const label = isNonEmptyString(input.label) ? input.label.trim() : id;
+  const unit = isNonEmptyString(input.unit) ? input.unit.trim() : undefined;
+  var scale: number = 1;
+  if (typeof input.scale === 'number') scale = input.scale || 1;
+  if (typeof input.scale === 'string') {
+    scale = Number(input.scale);
+    if (Number.isNaN(scale)) scale = 1;
+  }
+  
+  let highlight = typeof input.highlight === 'object'
+    && input.highlight !== null && !Array.isArray(input.highlight)
+    ? input.highlight as HighlightConditions : undefined;
+  if (highlight && Object.values(highlight).some(v=>!Array.isArray(v))) {
+    highlight = undefined
+  }
+  return {
+    specs: {
+      id, 
+      label, 
+      unit, 
+      highlight, 
+      scale
+    }, 
+    kind: 'accelerometer', 
+    Component: AccelerometerWidget, 
+    loadSpecificProps: (specs)=>({ scale: specs.scale })
+  } as const;
 }

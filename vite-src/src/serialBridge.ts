@@ -24,9 +24,12 @@ export function initSerialBridge() {
   listenersRegistered = true;
 
   safeOn(UPDATE_EVENT, (ev) => {
-    const payload = extractDetail(ev) as { id?: string; value?: number; timestamp?: number };
-    if (!payload?.id || typeof payload.value !== "number") return;
-    updateValue(payload.id, payload.value, payload.timestamp ? payload.timestamp * 1000 : undefined);
+    const payload = extractDetail(ev) as { values?: Record<string, number>, timestamp?: number };
+    if (payload.values) {
+      Object.entries(payload.values).forEach(([id , value]) => {
+        updateValue(id, value, payload.timestamp ? payload.timestamp * 1000 : undefined);
+      })
+    } else console.warn(`Empty values update event received with timestamp \`${payload.timestamp}\``)
   });
 
   safeOn(STATUS_EVENT, (ev) => {

@@ -1,13 +1,28 @@
 import { MIN_WIDGET_W, MIN_WIDGET_H, MIN_MULT, MAX_MULT, PAD, GAP } from '../constants';
+import { ReactNode } from 'react';
 
-export type WidgetKind = "number" | "accelerometer";
+type WidgetComponent<Props extends object> = (props: Props & { 
+    availableWidth: number, availableHeight: number, value: number, 
+    highlight: string, unit?: string
+  }) => ReactNode
 
-export type Widget = {
+export type WidgetKind<K extends string, Specs extends object, Props extends object = { }> = {
+  Component: WidgetComponent<Props>
+  kind: K, 
+  specs: Specs & { id: string, label: string, unit?: string, highlight?: HighlightConditions },
+  loadSpecificProps: (specs: Specs) => Props
+};
+
+type HighlightRange = { start: number } | { end: number } | { start: number, end: number }
+export type HighlightConditions = Record<string, (number | HighlightRange)[]>
+
+export type Widget<K extends string, Props extends object = { }> = {
   id: string;
   name: string;
   unit?: string;
   value: number;
-  kind: WidgetKind;
+  kind: K;
+  highlight?: HighlightConditions;
   x: number;
   y: number;
   w: number;
@@ -17,7 +32,11 @@ export type Widget = {
   rx: number;
   ry: number;
   z: number;
+  specificProps: Props;
+  Component: WidgetComponent<Props>;
 };
+
+type WidgetBase = Widget<any, any>;
 
 export type DragState = {
   id: string;
@@ -82,13 +101,13 @@ export function getWidgetSizeLimits(bounds: Size, baseW: number, baseH: number) 
   return { minW, minH, maxW, maxH, minMW, minMH, maxMW, maxMH };
 }
 
-export function clampToBounds(w: Widget, bounds: Size): Widget {
+export function clampToBounds<T extends WidgetBase>(w: T, bounds: Size): T {
   const x = clamp(w.x, 0, Math.max(0, bounds.width - w.w));
   const y = clamp(w.y, 0, Math.max(0, bounds.height - w.h));
   return { ...w, x, y };
 }
 
-export function overlaps(a: Widget, b: Widget) {
+export function overlaps(a: WidgetBase, b: WidgetBase) {
   return !(
     a.x + a.w <= b.x ||
     b.x + b.w <= a.x ||
@@ -97,7 +116,7 @@ export function overlaps(a: Widget, b: Widget) {
   );
 }
 
-export function rect(w: Widget) {
+export function rect(w: WidgetBase) {
   const left = w.x;
   const top = w.y;
   const right = w.x + w.w;
@@ -112,7 +131,7 @@ export function rect(w: Widget) {
   };
 }
 
-export function overlapAmount(a: Widget, b: Widget) {
+export function overlapAmount(a: WidgetBase, b: WidgetBase) {
   const ra = rect(a);
   const rb = rect(b);
   const ox = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left);
@@ -120,8 +139,8 @@ export function overlapAmount(a: Widget, b: Widget) {
   return { ox, oy };
 }
 
-function resolveAllOverlaps(
-  widgets: Widget[],
+function resolveAllOverlaps<T extends WidgetBase>(
+  widgets: T[],
   bounds: Size,
   lockedIds: Set<string> = new Set()
 ) {
@@ -194,7 +213,7 @@ function resolveAllOverlaps(
   return next;
 }
 
-export function withRelativeCenters(widgets: Widget[], bounds: Size): Widget[] {
+export function withRelativeCenters<T extends Widget<any, any>>(widgets: T[], bounds: Size): T[] {
   if (bounds.width <= 0 || bounds.height <= 0) return widgets;
   return widgets.map((w) => {
     const cx = w.x + w.w / 2;
@@ -207,8 +226,8 @@ export function withRelativeCenters(widgets: Widget[], bounds: Size): Widget[] {
   });
 }
 
-export function resizeWithPush(
-  widgets: Widget[],
+export function resizeWithPush<T extends WidgetBase>(
+  widgets: T[],
   state: Exclude<ResizeState, null>,
   desiredRect: { x: number; y: number; w: number; h: number },
   bounds: Size,
@@ -362,7 +381,7 @@ export function resizeWithPush(
   );
 }
 
-export function moveWithPush(widgets: Widget[], activeId: string, desiredX: number, desiredY: number, bounds: Size) {
+export function moveWithPush<T extends WidgetBase>(widgets: T[], activeId: string, desiredX: number, desiredY: number, bounds: Size) {
   const byId = new Map(widgets.map((w) => [w.id, { ...w }]));
   const active = byId.get(activeId);
   if (!active) return widgets;
@@ -451,8 +470,4 @@ export function computeWidgetWH(n: number, bounds: Size) {
   const h = clamp(Math.floor(cellH), 120, maxH);
 
   return { w, h, cols, rows };
-}
-
-export function normalizeKind(widget?: string): WidgetKind {
-  return widget?.trim().toLowerCase() === "accelerometer" ? "accelerometer" : "number";
 }

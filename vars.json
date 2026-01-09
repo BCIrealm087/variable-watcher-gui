@@ -1,6 +1,26 @@
 [
-  { "id": "0", "label": "Torque", "unit": "Nm" },
-  { "id": "1", "label": "RPM", "unit": "RPM", "widget": "accelerometer" },
-  { "id": "2", "label": "Temp Inversor", "unit": "C" },
-  { "id": "3", "label": "Temp Motor", "unit": "C" }
+  {
+    "id": "0", "label": "Torque", "unit": "Nm", "highlight":
+    { 
+      "#D10000": [{"start": 100, "end": 180}]
+    }
+  },
+  {
+    "id": "1", "label": "RPM", "unit": "RPM", "widget": "accelerometer", "highlight":
+    { 
+      "#D10000": [{"start": 3800}]
+    }, "scale": 1000
+  },
+  {
+    "id": "2", "label": "Temp Inversor", "unit": "C", "highlight":
+    { 
+      "#D10000": [{"start": 40}]
+    }
+  },
+  {
+    "id": "3", "label": "Temp Motor", "unit": "C", "highlight":
+    { 
+      "#D10000": [{"start": 50}]
+    }
+  }
 ]

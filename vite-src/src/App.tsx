@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { WINDOW_KEY, LAYOUT_KEY, VARS_CONFIG_KEY, VARS_CONFIG_PATH_KEY } from "./constants";
 import { getNeu, hasNeuWindow, safeGetData, safeSetData, safeRemoveData } from "./system";
-import { WidgetBoard, VarSpec, withPlaceholderFallback, parseVarSpecs} from "./components/WidgetBoard";
+import { Size } from "./components/widget-common";
+import { WidgetBoard, useBoardState } from "./components/WidgetBoard";
 import { initSerialBridge, startSerial, stopSerial, checkSerialHealth } from "./serialBridge";
 import { useSerialState } from "./variableStore";
 
@@ -17,27 +18,6 @@ import { useSerialState } from "./variableStore";
  * - Each widget also has per-widget multipliers (mw/mh) that the user controls via resizing
  * - Positions are stored as relative centers (rx/ry) so the layout stays proportional
  */
-
-type WidgetKind = "number" | "accelerometer";
-
-type Widget = {
-  id: string;
-  name: string;
-  unit?: string;
-  value: number;
-  kind: WidgetKind;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  mw: number;
-  mh: number;
-  rx: number;
-  ry: number;
-  z: number;
-};
-
-type Size = { width: number; height: number };
 
 function useContainerSize(ref: React.RefObject<HTMLElement | null>): Size {
   const [size, setSize] = useState<Size>({ width: 0, height: 0 });
@@ -63,17 +43,12 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const bounds = useContainerSize(containerRef);
 
-  const [widgets, setWidgets] = useState<Widget[]>([]);
-  const [initialized, setInitialized] = useState(false);
+  const boardState = useBoardState();
 
   const serialState = useSerialState();
   const [portInput, setPortInput] = useState("");
 
   const webFileRef = useRef<HTMLInputElement>(null);
-
-  const [varSpecs, setVarSpecs] = useState<VarSpec[]>(() =>
-    withPlaceholderFallback([])
-  );
 
   useEffect(() => {
     initSerialBridge();
@@ -99,9 +74,9 @@ export default function App() {
 
         const path = entries[0];
         const text: string = await neu.filesystem.readFile(path);
-        const parsed = withPlaceholderFallback(parseVarSpecs(text));
+        const parsed = boardState.parseVarSpecs(text)
 
-        setVarSpecs(parsed);
+        boardState.setVarSpecs(parsed);
         await safeSetData(VARS_CONFIG_KEY, text);
         await safeSetData(VARS_CONFIG_PATH_KEY, path);
         return;
@@ -110,7 +85,7 @@ export default function App() {
 
     // Web fallback
     webFileRef.current?.click();
-  }, [setVarSpecs]);
+  }, [boardState.setVarSpecs]);
 
   const onWebFilePicked = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -119,13 +94,13 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = async () => {
       const text = String(reader.result ?? "");
-      const parsed = withPlaceholderFallback(parseVarSpecs(text));
-      setVarSpecs(parsed);
+      const parsed = boardState.parseVarSpecs(text);
+      boardState.setVarSpecs(parsed);
       await safeSetData(VARS_CONFIG_KEY, text);
       await safeSetData(VARS_CONFIG_PATH_KEY, null); // no path in web mode
     };
     reader.readAsText(file);
-  }, [setVarSpecs]);
+  }, [boardState.setVarSpecs]);
 
   const onStartSerial = useCallback(async () => {
     await startSerial({ port: portInput || undefined });
@@ -165,7 +140,7 @@ export default function App() {
 
   // Persist window size when it changes (debounced). (Only meaningful in Neutralino window mode.)
   useEffect(() => {
-    if (!initialized) return;
+    if (!boardState.initialized) return;
 
     const neu = getNeu();
     if (!hasNeuWindow(neu)) return;
@@ -184,7 +159,7 @@ export default function App() {
     }, 500);
 
     return () => window.clearTimeout(t);
-  }, [bounds.width, bounds.height, initialized]);
+  }, [bounds.width, bounds.height, boardState.initialized]);
 
   return (
     <div
@@ -218,7 +193,7 @@ export default function App() {
 
         <div style={{ fontSize: 12, opacity: 0.8, textAlign: "right", display: "flex", flexDirection: "column", gap: 6 }}>
           <div>
-            Widgets: <b>{widgets.length}</b>
+            Widgets: <b>{boardState.widgets.length}</b>
           </div>
           <div>
             Bounds: <b>{bounds.width}</b>×<b>{bounds.height}</b>
@@ -332,8 +307,8 @@ export default function App() {
             <button
               onClick={() => {
                 void safeRemoveData(LAYOUT_KEY);
-                setInitialized(false);
-                setWidgets([]);
+                boardState.setInitialized(false);
+                boardState.setWidgets([]);
               }}
               style={{
                 fontSize: 12,
@@ -377,9 +352,7 @@ export default function App() {
       <WidgetBoard
         containerRef={containerRef}
         bounds={bounds}
-        handledWidgetsState={ [widgets, setWidgets] as const }
-        handledVarState={ [varSpecs, setVarSpecs] as const }
-        handledInitializedState={ [initialized, setInitialized] as const }
+        handledBoardState={ boardState }
       />
     </div>
   );

@@ -15,13 +15,13 @@
     "filesystem.readDirectory",
     "filesystem.readFile",
     "extensions.getStats",
+    "extensions.dispatch",
     "window.*"
   ],
   "extensions": [
     {
       "id": "serial-input-python",
-      "path": "python3",
-      "arguments": ["--py", "/extensions/serial-input-python/main.py"]
+      "command": "python C:\\Users\\Bruno\\programming\\TypeScript\\neutralinojs\\react\\full-stack\\variable-watcher-gui\\extensions\\serial-input-python\\main.py"
     }
   ],
   "singlePageServe": true,

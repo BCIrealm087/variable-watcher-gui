@@ -8,28 +8,37 @@ via Neutralino's extension dispatch events.
 """
 from __future__ import annotations
 
-import json
+import json, uuid
 import os
 import sys
 import threading
 import time
+import asyncio
 from dataclasses import dataclass
+from operator import itemgetter
 from typing import Any, Dict, Optional
+from collections.abc import Callable
 
 try:
     import serial  # type: ignore
 except ImportError as exc:  # pragma: no cover - runtime dependency
     raise SystemExit("pyserial is required. Run `pip install -r requirements.txt`.") from exc
 
+try:
+    import websockets  # type: ignore
+except ImportError as exc:  # pragma: no cover - runtime dependency
+    raise SystemExit("websockets is required. Run `pip install -r requirements.txt`.") from exc
 
 EXTENSION_ID = os.environ.get("NL_EXTID", "serial-input-python")
-DEFAULT_BAUDRATE = int(os.environ.get("SERIAL_BAUDRATE", "115200"))
+DEFAULT_BAUDRATE = int(os.environ.get("SERIAL_BAUDRATE", "57600"))
 DEFAULT_PORT = os.environ.get("SERIAL_PORT") or ""
 
-# Neutralino passes the access token in the init payload. Store it once available.
-_access_token: Optional[str] = os.environ.get("NL_TOKEN")
+# Neutralino passes the connection info in the init payload. Store it once available.
+_port: Optional[str]
+_token: Optional[str]
+_connect_token: Optional[str]
+_extension_id: Optional[str]
 _outgoing_lock = threading.Lock()
-
 
 @dataclass
 class SerialState:
@@ -52,129 +61,184 @@ class SerialState:
             "backoffSeconds": round(self.backoff_seconds, 3),
         }
 
-
 _state = SerialState()
 _stop_event = threading.Event()
 _serial_thread: Optional[threading.Thread] = None
 
+_broadcast_method_label = "app.broadcast"
 
 def log(msg: str) -> None:
-    send_message({"method": "app.broadcast", "data": {"event": "serial:log", "data": msg}})
+    send_message_stdout({"method": _broadcast_method_label, "data": {"event": "serial:log", "data": msg}})
 
-
-def send_message(payload: Dict[str, Any]) -> None:
+def send_message_stdout(payload: Dict[str, Any]) -> None:
     """Send a JSON payload to Neutralino over stdout."""
     with _outgoing_lock:
         sys.stdout.write(json.dumps(payload) + "\n")
         sys.stdout.flush()
 
+def parse_pm100_line(raw: bytes) -> Optional[Dict[str, Any]]:
+    """
+    PM100 stream format (per manual):
+      - Each value is a 16-bit word transmitted as 4 ASCII hex chars (nibbles)
+      - Each word is followed by a space delimiter
+      - A full set ends with CRLF
 
-def send_response(rpc_id: Any, result: Optional[Any] = None, error: Optional[Dict[str, Any]] = None) -> None:
-    message: Dict[str, Any] = {"id": rpc_id, "success": error is None}
-    if error:
-        message["error"] = error
-    if result is not None:
-        message["data"] = result
-    send_message(message)
-
-
-def call_app(method: str, data: Dict[str, Any]) -> None:
-    payload = {"method": method, "data": data}
-    if _access_token:
-        payload["accessToken"] = _access_token
-    send_message(payload)
-
-
-def broadcast(event: str, data: Any) -> None:
-    call_app("app.broadcast", {"event": event, "data": data})
-
-
-def parse_line(raw: bytes) -> Optional[Dict[str, Any]]:
-    text = raw.decode(errors="ignore").strip()
+    Returns:
+      {"values": {"0": word0, "1": word1, ...}}
+      where each word is an int in [0, 65535]
+    """
+    # raw likely includes b"...\r\n"
+    text = raw.decode("ascii", errors="ignore").strip()
     if not text:
         return None
 
-    # Try JSON first
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict) and "id" in parsed and "value" in parsed:
-            return {"id": str(parsed["id"]), "value": float(parsed["value"])}
-    except json.JSONDecodeError:
-        pass
+    parts = text.split()
+    if not parts:
+        return None
 
-    # Fallback: support "id:value" or "id,value" formats
-    if ":" in text:
-        parts = text.split(":", 1)
-    else:
-        parts = text.split(",", 1)
+    # Fallback: if nibbles are separated as single chars ("0 0 6 8 ..."),
+    # group every 4 into one word.
+    if all(len(p) == 1 for p in parts):
+        if len(parts) % 4 != 0:
+            return None
+        parts = ["".join(parts[i:i+4]) for i in range(0, len(parts), 4)]
 
-    if len(parts) == 2:
+    words: list[int] = []
+    for p in parts:
+        token = p.strip()
+
+        # If something weird slips in, try to salvage last 4 hex chars.
+        if len(token) < 4:
+            return None
+        if len(token) > 4:
+            token = token[-4:]
+
         try:
-            return {"id": parts[0].strip(), "value": float(parts[1])}
+            words.append(int(token, 16))
         except ValueError:
             return None
 
-    return None
+    return {"values": {str(i): w for i, w in enumerate(words)}}
 
+def open_serial(port: str, baud: int, timeout: float = 1):
+    # pySerial URL handlers contain "://": loop://, socket://, rfc2217://, etc.
+    if "://" in port:
+        return serial.serial_for_url(port, baudrate=baud, timeout=timeout)
+    return serial.Serial(port, baudrate=baud, timeout=timeout)
 
-def _reader_loop() -> None:
+def _reader_loop(broadcast_fn: Callable[[str, Any], asyncio.Handle]) -> None:
     global _state
     while not _stop_event.is_set():
         if not _state.port:
             _state.status = "error"
             _state.last_error = "No serial port configured"
-            broadcast("serial:status", _state.to_health())
+            broadcast_fn("serial:status", _state.to_health())
             time.sleep(1.0)
             continue
 
         try:
             _state.status = "connecting"
-            broadcast("serial:status", _state.to_health())
-            with serial.Serial(_state.port, _state.baudrate, timeout=1) as ser:
+            broadcast_fn("serial:status", _state.to_health())
+            with open_serial(_state.port, _state.baudrate, timeout=1) as ser:
                 _state.status = "connected"
                 _state.last_error = None
                 _state.backoff_seconds = 1.0
-                broadcast("serial:status", _state.to_health())
+                broadcast_fn("serial:status", _state.to_health())
                 while not _stop_event.is_set():
                     raw = ser.readline()
                     if not raw:
                         continue
-                    parsed = parse_line(raw)
+                    parsed = parse_pm100_line(raw)
                     if not parsed:
                         continue
                     parsed["timestamp"] = time.time()
                     _state.last_value = parsed
                     _state.last_seen = parsed["timestamp"]
-                    broadcast("serial:update", parsed)
+                    broadcast_fn("serial:update", parsed)
         except Exception as exc:  # pragma: no cover - hardware specific
             _state.status = "error"
             _state.last_error = str(exc)
-            broadcast("serial:status", _state.to_health())
+            broadcast_fn("serial:status", _state.to_health())
             time.sleep(_state.backoff_seconds)
             _state.backoff_seconds = min(_state.backoff_seconds * 1.5, 30.0)
 
     _state.status = "stopped"
-    broadcast("serial:status", _state.to_health())
+    broadcast_fn("serial:status", _state.to_health())
 
-
-def ensure_thread_running() -> None:
+def ensure_thread_running(broadcast_fn: Callable[[str, Any], asyncio.Handle]) -> None:
     global _serial_thread
     if _serial_thread and _serial_thread.is_alive():
         return
     _stop_event.clear()
-    _serial_thread = threading.Thread(target=_reader_loop, daemon=True)
+    _serial_thread = threading.Thread(target=_reader_loop, args=(broadcast_fn,), daemon=True)
     _serial_thread.start()
 
+def loadInitData(message: Dict[str, Any]) -> None:
+    global _port, _token, _connect_token, _extension_id
+    initDataKeys = ["nlPort", "nlToken", "nlConnectToken", "nlExtensionId"]
+    if not isinstance(message, dict):
+        log(f"Missing or incorrectly typed data received during initialization of extension {EXTENSION_ID}")
+        return
+    _port, _token, _connect_token, _extension_id \
+      = itemgetter(*initDataKeys)(message)
+    firstMissing: tuple[str, str | None]
+    if any((not (firstMissing := i)[1]) for i in zip(initDataKeys, [_port, _token, _connect_token, _extension_id])):
+      raise ValueError(f"During initialization of extension {EXTENSION_ID}: no valid value for {firstMissing} was provided")
+    log(f"Init data for extension {EXTENSION_ID} loaded succesfuly")
 
-def handle_command(event: str, payload: Any) -> Dict[str, Any]:
+async def receiver(
+    ws: websockets.ClientConnection, 
+    onMsgReceived: Callable[[websockets.Data, Callable[[str, Any], asyncio.Handle]], None], 
+    broadcast_fn: Callable[[str, Any], asyncio.Handle]
+):
+    async for msg in ws:   # ends if connection closes
+        onMsgReceived(msg, broadcast_fn)
+
+async def sender(ws: websockets.ClientConnection, out_q: asyncio.Queue):
+    while True:
+        msg = await out_q.get()
+        await ws.send(msg)
+
+async def wsClient(
+    onMsgReceived: Callable[[websockets.Data, Callable[[str, Any], asyncio.Handle]], None], 
+    workers: Optional[list[Callable[[Callable[[str, Any], asyncio.Handle]], None]]] = None
+) -> None:
+    uri = f"ws://localhost:{_port}?extensionId={_extension_id}&connectToken={_connect_token}"
+    out_q: asyncio.Queue[str] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    broadcast_fn: Callable[[str, Any], asyncio.Handle] \
+      = lambda event, data: loop.call_soon_threadsafe(
+          out_q.put_nowait, json.dumps(
+              {
+                "id": str(uuid.uuid4()),
+                "method": _broadcast_method_label, 
+                "accessToken": _token, 
+                "data": {"event": event, "data": data}
+              }
+          )
+        )
+    if workers:
+      threads = [
+              threading.Thread(target=worker, args=(broadcast_fn,), daemon=True)
+              for worker in workers
+          ]
+      for t in threads:
+          t.start()
+    log(f"{EXTENSION_ID} establishing ws connection through `{uri}`")
+    async with websockets.connect(uri) as ws:
+        send_task = asyncio.create_task(sender(ws, out_q))
+        await receiver(ws, onMsgReceived, broadcast_fn)
+        send_task.cancel()
+
+def handle_command(event: str, data: Any, broadcast_fn: Callable[[str, Any], asyncio.Handle]) -> Dict[str, Any]:
     global _state
     if event == "start":
-        if payload and isinstance(payload, dict):
-            if payload.get("port"):
-                _state.port = str(payload["port"])
-            if payload.get("baudrate"):
-                _state.baudrate = int(payload["baudrate"])
-        ensure_thread_running()
+        if data and isinstance(data, dict):
+            if data.get("port"):
+                _state.port = str(data["port"])
+            if data.get("baudrate"):
+                _state.baudrate = int(data["baudrate"])
+        ensure_thread_running(broadcast_fn)
         return {"ok": True, "status": _state.to_health()}
 
     if event == "stop":
@@ -182,63 +246,32 @@ def handle_command(event: str, payload: Any) -> Dict[str, Any]:
         return {"ok": True, "status": _state.to_health()}
 
     if event == "configure":
-        if not isinstance(payload, dict):
+        if not isinstance(data, dict):
             raise ValueError("configure payload must be an object")
-        _state.port = str(payload.get("port") or _state.port)
-        if payload.get("baudrate"):
-            _state.baudrate = int(payload["baudrate"])
+        _state.port = str(data.get("port") or _state.port)
+        if data.get("baudrate"):
+            _state.baudrate = int(data["baudrate"])
         return {"ok": True, "status": _state.to_health()}
 
     if event == "health":
         return {"ok": True, "status": _state.to_health()}
 
-    if event == "read":
-        port = str(payload.get("port") or _state.port) if isinstance(payload, dict) else _state.port
-        baud = int(payload.get("baudrate") or _state.baudrate) if isinstance(payload, dict) else _state.baudrate
-        if not port:
-            raise ValueError("No port configured")
-        try:
-            with serial.Serial(port, baud, timeout=2) as ser:
-                raw = ser.readline()
-                parsed = parse_line(raw)
-                if not parsed:
-                    raise ValueError("No parsable data")
-                parsed["timestamp"] = time.time()
-                return {"ok": True, "data": parsed}
-        except Exception as exc:  # pragma: no cover
-            raise RuntimeError(str(exc))
+    return {"ok": False, "status": _state.to_health()}
+    # unknown event: ignore
 
-    raise ValueError(f"Unknown event: {event}")
-
-
-def handle_rpc(message: Dict[str, Any]) -> None:
-    global _access_token
-    method = message.get("method")
-    rpc_id = message.get("id")
-
-    # init payload captures the access token
-    if method == "init":
-        token = message.get("accessToken") or message.get("data", {}).get("accessToken")
-        if token:
-            _access_token = token
-        send_response(rpc_id, {"ok": True, "extension": EXTENSION_ID})
-        return
-
-    if method != "extensions.dispatch":
-        send_response(rpc_id, None, {"code": "unsupported_method", "message": str(method)})
-        return
-
+def handle_message(data: Any, broadcast_fn: Callable[[str, Any], asyncio.Handle]):
     try:
-        payload = message.get("data", {})
-        event = payload.get("event")
-        data = payload.get("data")
-        if not event:
-            raise ValueError("Missing event in dispatch payload")
-        result = handle_command(event, data)
-        send_response(rpc_id, result)
-    except Exception as exc:  # pragma: no cover - defensive
-        send_response(rpc_id, None, {"code": "dispatch_error", "message": str(exc)})
-
+        message = json.loads(data)
+    except json.JSONDecodeError:
+        return
+    try:
+        event = message["event"]
+        event_data = message["data"]
+    except:
+        return
+    if event:
+      response = handle_command(event, event_data, broadcast_fn)
+      send_message_stdout(response)
 
 def main() -> None:
     log(f"Starting extension {EXTENSION_ID}")
@@ -248,10 +281,12 @@ def main() -> None:
             continue
         try:
             message = json.loads(line)
+            loadInitData(message)
+            asyncio.run(wsClient(
+                handle_message
+            ))
         except json.JSONDecodeError:
             continue
-        handle_rpc(message)
-
 
 if __name__ == "__main__":
     main()

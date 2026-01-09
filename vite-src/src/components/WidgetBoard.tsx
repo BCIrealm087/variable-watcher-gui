@@ -10,57 +10,53 @@ import { useSerialState } from "../variableStore";
 
 import { WidgetCard } from "./WidgetCard";
 import { 
-  Widget, WidgetKind, ResizeDir, 
+  Widget, WidgetKind, ResizeDir,
   DragState, ResizeState, getWidgetSizeLimits, 
   Size, clamp, resizeWithPush, 
   moveWithPush, isNonEmptyString, rand, 
   computeWidgetWH, clampToBounds, withRelativeCenters, 
-  rect, overlaps, overlapAmount, 
-  normalizeKind
+  rect, overlaps, overlapAmount
 } from "./widget-common";
+import { NumericWidget, parseNumeric } from "./NumericWidget";
+import { parseAccelerometer } from "./AccelerometerWidget";
 
-type PersistedWidget = {
+type PersistedWidget<K extends string> = {
   id: string;
   mw: number;
   mh: number;
   rx: number;
   ry: number;
   z?: number;
-  kind?: WidgetKind;
+  kind?: K;
 };
 
-type PersistedLayoutV1 = {
+type PersistedLayoutV1<K extends string> = {
   version: 1;
   savedAt: number;
-  widgets: PersistedWidget[];
+  widgets: PersistedWidget<K>[];
 };
 
 // Config-only shape (no value here)
-export type VarSpec = {
-  id: string;
-  label: string;
-  unit?: string;
-  widget?: string; // optional, string from JSON (e.g. "accelerometer")
-};
+export type VarSpec<K extends string, Specs extends object, Props extends object> = WidgetKind<K, Specs, Props>
 
 // Runtime shape used by widget spawning
-type VarDef = {
-  id: string;
-  label: string;
-  unit?: string;
-  kind: WidgetKind; // "number" | "accelerometer"
-  value: number;    // stable random session value
+type VarDef<K extends string, T extends object, U extends object> = VarSpec<K, T, U> & {
+  value: number;    // stable null session value
 };
+
+type VarDefFromSpec<K extends string, T extends object, U extends object> = WidgetKind<K, T, U> & { value: number };
 
 type StateFunc<T> = Dispatch<SetStateAction<T>>;
 
-export function withPlaceholderFallback(specs: VarSpec[]): VarSpec[] {
-  return specs.length
-    ? specs
-    : [{ id: "0", label: "placeholder", widget: "number" as const }];
+export function withPlaceholderFallback<T extends WidgetKind<any, any>[]>(s: T): T & WidgetKind<'number', { }, { }>[] {
+  return s.length
+    ? s
+    : [{ specs: { id: "0", label: "placeholder" }, kind: 'number', Component: NumericWidget, loadSpecificProps: (_)=>({ })  }] as T;
 }
 
-export function parseVarSpecs(text: string): VarSpec[] {
+export function parseVarSpecs<
+  M extends { [K: string]: (input: Record<string, unknown>)=>VarSpec<typeof K, object, object> }
+>(text: string, kindParseMapping: M) {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -69,41 +65,37 @@ export function parseVarSpecs(text: string): VarSpec[] {
   }
   if (!Array.isArray(raw)) return [];
 
-  const out: VarSpec[] = [];
+  const out: (ReturnType<M[keyof M]>)[] = [];
   const seen = new Set<string>();
 
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
     const obj = item as Record<string, unknown>;
+    const widgetKind = isNonEmptyString(obj.widget) ? obj.widget.trim().toLowerCase() : 'number';
+    const parsingFn = kindParseMapping[widgetKind as keyof M];
+    if(!parsingFn) continue;
+    const widgetInfo = parsingFn(obj);
 
-    const id = isNonEmptyString(obj.id) ? obj.id.trim() : "";
-    if (!id || seen.has(id)) continue;
-
-    const label = isNonEmptyString(obj.label) ? obj.label.trim() : id;
-    const unit = isNonEmptyString(obj.unit) ? obj.unit.trim() : undefined;
-
-    const widget = isNonEmptyString(obj.widget) ? obj.widget.trim().toLowerCase() : undefined;
-
-    seen.add(id);
-    out.push({ id, label, unit, widget });
+    seen.add(widgetInfo.specs.id);
+    out.push(widgetInfo as (ReturnType<M[keyof M]>));
   }
 
   return out;
 }
 
-function parseLayout(raw: string | null): PersistedLayoutV1 | null {
+function parseLayout<K extends string>(raw: string | null): PersistedLayoutV1<K> | null {
   if (!raw) return null;
   try {
     const obj = JSON.parse(raw);
     if (obj?.version !== 1 || !Array.isArray(obj.widgets)) return null;
-    return obj as PersistedLayoutV1;
+    return obj as PersistedLayoutV1<K>;
   } catch {
     return null;
   }
 }
 
-function resolveAllOverlaps(
-  widgets: Widget[],
+function resolveAllOverlaps<T extends Widget<any, any>>(
+  widgets: T[],
   bounds: Size,
   lockedIds: Set<string> = new Set()
 ) {
@@ -176,11 +168,11 @@ function resolveAllOverlaps(
   return next;
 }
 
-function makeInitialWidgets(defs: VarDef[], bounds: Size): Widget[] {
+function makeInitialWidgets<K extends string, T extends object, U extends object>(defs: VarDef<K, T, U>[], bounds: Size): Widget<K, U>[] {
   const n = defs.length;
   const { w: baseW, h: baseH, cols } = computeWidgetWH(n, bounds);
 
-  const widgets: Widget[] = defs.map((d, i) => {
+  const widgets: Widget<K, U>[] = defs.map((d, i) => {
     const row = Math.floor(i / cols);
     const col = i % cols;
 
@@ -188,13 +180,13 @@ function makeInitialWidgets(defs: VarDef[], bounds: Size): Widget[] {
     const baseY = GAP + row * (baseH + GAP);
     const x = baseX + rand(-12, 12);
     const y = baseY + rand(-12, 12);
-
-    const w: Widget = {
-      id: d.id,
-      name: d.label,
-      unit: d.unit,       // <-- from config
+    const w: Widget<K, U> = {
+      id: d.specs.id,
+      name: d.specs.label,
+      unit: d.specs.unit,             // <-- from config
       value: d.value,
-      kind: d.kind,       // <-- from config (default already applied)
+      kind: d.kind,                   // <-- from config (default already applied)
+      highlight: d.specs.highlight,   // <-- from config
       x,
       y,
       w: baseW,
@@ -204,6 +196,8 @@ function makeInitialWidgets(defs: VarDef[], bounds: Size): Widget[] {
       rx: 0.5,
       ry: 0.5,
       z: i,
+      specificProps: d.loadSpecificProps(d.specs), 
+      Component: d.Component
     };
 
     return clampToBounds(w, bounds);
@@ -212,7 +206,9 @@ function makeInitialWidgets(defs: VarDef[], bounds: Size): Widget[] {
   return withRelativeCenters(resolveAllOverlaps(widgets, bounds), bounds);
 }
 
-function buildWidgetsFromLayout(defs: VarDef[], bounds: Size, layout: PersistedLayoutV1 | null) {
+function buildWidgetsFromLayout<
+  K extends string, T extends object, U extends object>(defs: VarDef<K, T, U>[], bounds: Size, layout: PersistedLayoutV1<K> | null)
+{
   const base = computeWidgetWH(defs.length, bounds);
   const baseW = base.w;
   const baseH = base.h;
@@ -263,7 +259,7 @@ function buildWidgetsFromLayout(defs: VarDef[], bounds: Size, layout: PersistedL
   return withRelativeCenters(resolveAllOverlaps(merged, bounds), bounds);
 }
 
-function layoutFromWidgets(ws: Widget[]): PersistedLayoutV1 {
+function layoutFromWidgets<K extends string>(ws: Widget<K>[]): PersistedLayoutV1<K> {
   return {
     version: 1,
     savedAt: Date.now(),
@@ -279,19 +275,19 @@ function layoutFromWidgets(ws: Widget[]): PersistedLayoutV1 {
   };
 }
 
-const bringToFront = (id: string, Component: { setWidgets: StateFunc<Widget[]> }) => {
+const bringToFront = <K extends string>(id: string, Component: { setWidgets: StateFunc<Widget<K>[]> }) => {
   Component.setWidgets((prev) => {
     const maxZ = prev.reduce((m, w) => Math.max(m, w.z), 0);
     return prev.map((w) => (w.id === id ? { ...w, z: maxZ + 1 } : w));
   });
 };
 
-const onDragPointerDown = (e: React.PointerEvent, id: string, 
+const onDragPointerDown = <K extends string>(e: React.PointerEvent, id: string, 
   Component: {
     containerRef: RefObject<HTMLDivElement | null>, 
-    widgets: Widget[], 
+    widgets: Widget<K>[], 
     dragRef: RefObject<DragState>, 
-    setWidgets: StateFunc<Widget[]>
+    setWidgets: StateFunc<Widget<K>[]>
   }
 ) => {
   const el = Component.containerRef.current;
@@ -314,12 +310,12 @@ const onDragPointerDown = (e: React.PointerEvent, id: string,
   };
 };
 
-const onResizePointerDown = (e: React.PointerEvent, id: string, dirX: ResizeDir, dirY: ResizeDir, 
+const onResizePointerDown = <K extends string>(e: React.PointerEvent, id: string, dirX: ResizeDir, dirY: ResizeDir, 
   Component: {
     containerRef: RefObject<HTMLDivElement | null>, 
-    widgets: Widget[], 
+    widgets: Widget<K>[], 
     resizeRef: RefObject<ResizeState>, 
-    setWidgets: StateFunc<Widget[]>
+    setWidgets: StateFunc<Widget<K>[]>
   }
 ) => {
   const el = Component.containerRef.current;
@@ -346,7 +342,7 @@ const onResizePointerDown = (e: React.PointerEvent, id: string, dirX: ResizeDir,
   };
 };
 
-const onPointerMove = (e: React.PointerEvent, 
+const onPointerMove = <K extends string>(e: React.PointerEvent, 
   Component: {
     containerRef: RefObject<HTMLDivElement | null>, 
     resizeRef: RefObject<ResizeState>, 
@@ -355,7 +351,7 @@ const onPointerMove = (e: React.PointerEvent,
       h: number;
     }>, 
     bounds: Size, 
-    setWidgets: StateFunc<Widget[]>, 
+    setWidgets: StateFunc<Widget<K>[]>, 
     dragRef: RefObject<DragState>
   }
 ) => {
@@ -420,43 +416,77 @@ const onPointerUpOrCancel = (Component: { resizeRef: RefObject<ResizeState>, dra
   Component.resizeRef.current = null;
 };
 
-export function WidgetBoard({
-  containerRef, bounds, handledInitializedState, handledWidgetsState, handledVarState
+type MergedKeysOf<T extends object> = Exclude<keyof T, number | symbol> | 'number' | 'accelerometer';
+
+export const baseParseMapping = {
+  'number': parseNumeric,
+  'accelerometer': parseAccelerometer
+}
+
+export function useBoardState<
+M extends { [K: string]: (input: Record<string, unknown>)=>VarSpec<MergedKeysOf<M>, any, any> }
+>(widgetKindParseMapping: M = baseParseMapping as M & typeof baseParseMapping) {
+  const [initialized, setInitialized] = useState(false);
+  const [varSpecs, setVarSpecs] = useState<
+    (WidgetKind<'number', {}> | WidgetKind<'accelerometer', {}> | ReturnType<M[keyof M]>)[]
+  >(() =>
+    withPlaceholderFallback([])
+  );
+  const [widgets, setWidgets] = useState<Widget<MergedKeysOf<M>>[]>([]);
+  const _parseVarSpecs = (text: string) => withPlaceholderFallback(parseVarSpecs(text, widgetKindParseMapping));
+  return {
+    initialized, setInitialized, initializedState: [initialized, setInitialized],
+    widgets, setWidgets, widgetsState: [widgets, setWidgets],
+    varSpecs, setVarSpecs, varSpecsState: [varSpecs, setVarSpecs],
+    kindParseMapping: widgetKindParseMapping, 
+    parseVarSpecs: _parseVarSpecs
+  } as const
+}
+
+export function WidgetBoard<M extends { [K: string]: (input: Record<string, unknown>)=>VarSpec<MergedKeysOf<M>, any, any> }>({
+  containerRef, bounds, handledBoardState
 }: {
   containerRef: RefObject<HTMLDivElement | null>, 
   bounds: { width: number, height: number }, 
-  handledInitializedState?: Readonly<[boolean, StateFunc<boolean>]>
-  handledWidgetsState?: Readonly<[Widget[], StateFunc<Widget[]>]>, 
-  handledVarState?: Readonly<[VarSpec[], StateFunc<VarSpec[]>]>,
+  handledBoardState?: ReturnType<typeof useBoardState<M>>
 }) {
   const valuesRef = useRef<Record<string, number>>({});
   const serialState = useSerialState();
   const baseRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
-  const [initialized, setInitialized] = handledInitializedState || useState(false);
-  const [varSpecs, setVarSpecs] = handledVarState || useState<VarSpec[]>(() =>
-    withPlaceholderFallback([])
-  );
-  const varDefs = useMemo<VarDef[]>(() => {
+  const [initialized, setInitialized] = handledBoardState?.initializedState || useState(false);
+  const mergedParseMapping = {
+    ...baseParseMapping, 
+    ...(handledBoardState?.kindParseMapping || baseParseMapping as M & typeof baseParseMapping)
+  }
+  const [varSpecs, setVarSpecs] = handledBoardState?.varSpecsState
+    || useState<
+      (WidgetKind<'number', {}> | WidgetKind<'accelerometer', {}> | ReturnType<M[keyof M]>)[]
+    >(() =>
+      withPlaceholderFallback([])
+    );
+  const varDefs = useMemo<(VarDefFromSpec<MergedKeysOf<M>, any, any>)[]>(() => {
     const specs = withPlaceholderFallback(varSpecs);
 
     return specs.map((s) => {
-      let v = valuesRef.current[s.id];
+      let v = valuesRef.current[s.specs.id];
       if (v == null) {
-        v = Math.round(Math.random() * 1000) / 10;
-        valuesRef.current[s.id] = v;
+        v = 0;
+        valuesRef.current[s.specs.id] = v;
       }
 
       return {
-        id: s.id,
-        label: s.label,
-        unit: s.unit?.trim() ? s.unit.trim() : undefined,
-        kind: normalizeKind(s.widget),
-        value: v,
-      };
+        kind: s.kind, 
+        specs: {
+          ...s.specs
+        }, 
+        value: v, 
+        Component: s.Component, 
+        loadSpecificProps: s.loadSpecificProps
+      }
     });
   }, [varSpecs]);
-  const [widgets, setWidgets] = handledWidgetsState || useState<Widget[]>([]);
-  const latestWidgetsRef = useRef<Widget[]>([]);
+  const [widgets, setWidgets] = handledBoardState?.widgetsState || useState<Widget<MergedKeysOf<M>>[]>([]);
+  const latestWidgetsRef = useRef<Widget<MergedKeysOf<M>>[]>([]);
   latestWidgetsRef.current = widgets;
   const dragRef = useRef<DragState>(null);
   const resizeRef = useRef<ResizeState>(null);
@@ -484,7 +514,7 @@ export function WidgetBoard({
       if (lastPath && neu?.filesystem?.readFile) {
         try {
           const text = await neu.filesystem.readFile(lastPath);
-          const parsed = withPlaceholderFallback(parseVarSpecs(text));
+          const parsed = withPlaceholderFallback(parseVarSpecs(text, mergedParseMapping));
           setVarSpecs(parsed);
           await safeSetData(VARS_CONFIG_KEY, text);
           return;
@@ -492,7 +522,7 @@ export function WidgetBoard({
       }
 
       const stored = await safeGetData(VARS_CONFIG_KEY);
-      const parsed = stored ? parseVarSpecs(stored) : [];
+      const parsed = stored ? parseVarSpecs(stored, mergedParseMapping) : [];
       setVarSpecs(withPlaceholderFallback(parsed));
     })();
   }, []);
@@ -504,8 +534,7 @@ export function WidgetBoard({
 
     (async () => {
       const raw = await safeGetData(LAYOUT_KEY);
-      const layout = parseLayout(raw);
-
+      const layout = parseLayout<MergedKeysOf<M>>(raw);
       const built = buildWidgetsFromLayout(varDefs, bounds, layout);
       const { w: baseW, h: baseH } = computeWidgetWH(built.length, bounds);
       baseRef.current = { w: baseW, h: baseH };
@@ -573,7 +602,7 @@ export function WidgetBoard({
     if (!initialized) return;
 
     const t = window.setTimeout(() => {
-      const payload: PersistedLayoutV1 = {
+      const payload: PersistedLayoutV1<MergedKeysOf<M>> = {
         version: 1,
         savedAt: Date.now(),
         widgets: latestWidgetsRef.current.map((w) => ({
@@ -595,7 +624,7 @@ export function WidgetBoard({
   // Best-effort flush on close/unload.
   useEffect(() => {
     const flush = () => {
-      const payload: PersistedLayoutV1 = {
+      const payload: PersistedLayoutV1<MergedKeysOf<M>> = {
         version: 1,
         savedAt: Date.now(),
         widgets: latestWidgetsRef.current.map((w) => ({

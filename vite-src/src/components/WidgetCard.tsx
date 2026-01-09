@@ -1,23 +1,44 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Widget, ResizeDir } from "./widget-common";
-import { NumericWidget } from "./NumericWidget";
-import { AccelerometerWidget } from "./AccelerometerWidget";
 
 const HEADER_H = 44;
 
-export function WidgetCard({
+export function WidgetCard<K extends string, Props extends object>({
   w,
   isDragging,
   isResizing,
   onDragPointerDown,
-  onResizePointerDown,
+  onResizePointerDown
 }: {
-  w: Widget;
+  w: Widget<K, Props>;
   isDragging: boolean;
   isResizing: boolean;
   onDragPointerDown: (e: React.PointerEvent, id: string) => void;
   onResizePointerDown: (e: React.PointerEvent, id: string, dirX: ResizeDir, dirY: ResizeDir) => void;
 }) {
+  const [highlight, setHighlight] = useState("");
+
+  useEffect(()=>{
+    if (!w.highlight) return;
+    Object.entries(w.highlight).some(([color, ranges])=>{
+      if (ranges.some(range=>{
+        if (typeof range === "number") {
+          return w.value === range;
+        }
+        let contained = true;
+        if ('start' in range)
+          contained = contained && w.value >= range.start;
+        if ('end' in range)
+           contained = contained && w.value <= range.end;
+        return contained;
+      })) {
+        setHighlight(color);
+      } else {
+        setHighlight("");
+      }
+    });
+  }, [w.value, w.highlight]);
+
   const edge = 8;
   const corner = 14;
 
@@ -70,9 +91,37 @@ export function WidgetCard({
         userSelect: "none",
         transform: isDragging || isResizing ? "scale(1.01)" : "scale(1)",
         transition: isDragging || isResizing ? "none" : "transform 120ms ease",
-        overflow: "hidden",
+        overflow: "hidden"
       }}
     >
+      <div
+        aria-hidden
+        style={{
+          position: "absolute",
+          inset: 0,
+          borderRadius: 18,
+          background: highlight || "transparent",
+          // mixBlendMode: "screen",  // or "overlay", "soft-light"
+          pointerEvents: "none",
+          transition: "background 160ms ease",
+          zIndex: 0,
+          opacity: 0.125
+        }}
+      />
+      <div
+        aria-hidden
+        style={{
+          position: "absolute",
+          inset: 0,
+          border: `1px solid ${highlight || "rgba(255,255,255,0.18)"}`,
+          borderRadius: 18,
+          background: "transparent",
+          // mixBlendMode: "screen",  // or "overlay", "soft-light"
+          pointerEvents: "none",
+          transition: "background 160ms ease",
+          zIndex: 0,
+        }}
+      />
       <div
         onPointerDown={(e) => onDragPointerDown(e, w.id)}
         style={{
@@ -103,11 +152,12 @@ export function WidgetCard({
           padding: bodyPadding,
         }}
       >
-        {w.kind === "accelerometer" ? (
-          <AccelerometerWidget unit={w.unit} value={w.value} availableWidth={innerW} availableHeight={innerH} />
-        ) : (
-          <NumericWidget unit={w.unit} value={w.value} availableWidth={innerW} availableHeight={innerH} />
-        )}
+        {
+          <w.Component
+            unit={w.unit} value={w.value} availableWidth={innerW} availableHeight={innerH}
+            highlight={highlight} {...w.specificProps}
+          />
+        }
       </div>
 
       {/* Resize handles */}
