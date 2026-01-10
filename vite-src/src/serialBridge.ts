@@ -1,7 +1,8 @@
 import { getNeu } from "./system";
-import { updateConnection, updateValue } from "./variableStore";
+import { updateConnection, updateValue, SerialState } from "./variableStore";
 
-type DispatchResult = { ok?: boolean; error?: { code?: string; message?: string }; status?: any; data?: any };
+type DispatchResult = { ok?: boolean; error?: { code?: string; message?: string }  };
+type UpdatePayload = { values?: Record<string, number>, timestamp?: number };
 
 const EXTENSION_ID = "serial-input-python";
 const UPDATE_EVENT = "serial:update";
@@ -10,7 +11,7 @@ const STATUS_EVENT = "serial:status";
 let listenersRegistered = false;
 
 function extractDetail(ev: CustomEvent) {
-  return (ev as CustomEvent).detail?.data ?? (ev as CustomEvent).detail;
+  return ev.detail?.data ?? ev.detail;
 }
 
 function safeOn(event: string, handler: (ev: CustomEvent) => void) {
@@ -24,7 +25,7 @@ export function initSerialBridge() {
   listenersRegistered = true;
 
   safeOn(UPDATE_EVENT, (ev) => {
-    const payload = extractDetail(ev) as { values?: Record<string, number>, timestamp?: number };
+    const payload: UpdatePayload = extractDetail(ev);
     if (payload.values) {
       Object.entries(payload.values).forEach(([id , value]) => {
         updateValue(id, value, payload.timestamp ? payload.timestamp * 1000 : undefined);
@@ -33,14 +34,14 @@ export function initSerialBridge() {
   });
 
   safeOn(STATUS_EVENT, (ev) => {
-    const payload = extractDetail(ev) as any;
+    const payload: Partial<SerialState> = extractDetail(ev);
     if (!payload) return;
     updateConnection({
       status: payload.status ?? "idle",
       port: payload.port ?? "",
-      baudrate: payload.baudrate ?? 115200,
+      baudrate: payload.baudrate ?? 57600,
       lastError: payload.lastError,
-      lastUpdate: payload.lastSeen ? payload.lastSeen * 1000 : undefined,
+      lastUpdate: payload.lastUpdate ? payload.lastUpdate * 1000 : undefined,
     });
   });
 }
@@ -50,19 +51,10 @@ async function dispatch(event: string, data?: any): Promise<DispatchResult> {
   if (!neu?.extensions?.dispatch) {
     return { ok: false, error: { code: "no_neutralino", message: "Neutralino extensions are unavailable" } };
   }
-
   try {
-    const res: DispatchResult = (await neu.extensions.dispatch(EXTENSION_ID, event, data)) as any;
-    if (res?.status) {
-      updateConnection({
-        status: res.status.status ?? res.status.state ?? "idle",
-        port: res.status.port ?? "",
-        baudrate: res.status.baudrate ?? 115200,
-        lastError: res.status.lastError,
-        lastUpdate: res.status.lastSeen ? res.status.lastSeen * 1000 : undefined,
-      });
-    }
-    return res ?? { ok: true };
+    await neu.extensions.dispatch(EXTENSION_ID, event, data); // void return type - responses received through broad-
+                                                              // cast event
+    return { ok: true };
   } catch (err: any) {
     const message = err?.message ?? String(err);
     updateConnection({ status: "error", lastError: message });
@@ -80,10 +72,6 @@ export async function stopSerial() {
 
 export async function configureSerial(data: { port?: string; baudrate?: number }) {
   return dispatch("configure", data);
-}
-
-export async function readSerialOnce(data?: { port?: string; baudrate?: number }) {
-  return dispatch("read", data);
 }
 
 export async function checkSerialHealth() {

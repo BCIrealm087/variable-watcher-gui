@@ -1,7 +1,4 @@
-import {
-  clamp, isNonEmptyString, HighlightConditions, 
-  WidgetKind
-} from "./widget-common";
+import { WidgetSpec, HighlightConditions, isNonEmptyString, clamp } from "./widget-common";
 
 export function NumericWidget({
   unit,
@@ -56,7 +53,7 @@ export function NumericWidget({
 }
 
 export function parseNumeric(input: Record<string, unknown>): 
-  WidgetKind<'number', { }, { }>
+  WidgetSpec<'numeric', { }, { }>
 {
   const id = isNonEmptyString(input.id) ? input.id.trim() : "";
 
@@ -76,8 +73,8 @@ export function parseNumeric(input: Record<string, unknown>):
       unit, 
       highlight
     }, 
-    kind: 'number', 
+    kind: 'numeric', 
     Component: NumericWidget, 
-    loadSpecificProps: (_)=> ({ })
+    loadSpecificProps: ()=> ({ })
   } as const;
 }

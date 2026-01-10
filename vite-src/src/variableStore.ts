@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "error" | "stopped";
 
-type SerialState = {
+export type SerialState = {
   status: ConnectionStatus;
   port: string;
   baudrate: number;
@@ -15,7 +15,7 @@ type SerialState = {
 let state: SerialState = {
   status: "idle",
   port: "",
-  baudrate: 115200,
+  baudrate: 57600,
   lastError: null,
   lastUpdate: null,
   lastValue: undefined,

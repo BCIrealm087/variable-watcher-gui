@@ -1,6 +1,6 @@
 import {
-  clamp, polarToCartesian, describeArc, 
-  isNonEmptyString, HighlightConditions, WidgetKind
+  HighlightConditions, WidgetSpec, isNonEmptyString,
+  clamp, polarToCartesian, describeArc
 } from "./widget-common";
 
 export function AccelerometerWidget({
@@ -187,7 +187,7 @@ export function AccelerometerWidget({
 }
 
 export function parseAccelerometer(input: Record<string, unknown>): 
-  WidgetKind<'accelerometer', { scale: number }, { scale: number }>
+  WidgetSpec<'accelerometer', { scale: number }, { scale: number }>
 {
   const id = isNonEmptyString(input.id) ? input.id.trim() : "";
 

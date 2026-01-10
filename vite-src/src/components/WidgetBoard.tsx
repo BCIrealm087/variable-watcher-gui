@@ -10,13 +10,17 @@ import { useSerialState } from "../variableStore";
 
 import { WidgetCard } from "./WidgetCard";
 import { 
-  Widget, WidgetKind, ResizeDir,
-  DragState, ResizeState, getWidgetSizeLimits, 
-  Size, clamp, resizeWithPush, 
-  moveWithPush, isNonEmptyString, rand, 
-  computeWidgetWH, clampToBounds, withRelativeCenters, 
-  rect, overlaps, overlapAmount
+  Widget, WidgetSpec, WidgetSpecBase,
+  WidgetBase, isNonEmptyString, rand, 
+  clamp
 } from "./widget-common";
+import {
+  ResizeDir, DragState, ResizeState,
+  Size, getWidgetSizeLimits, moveWithPush, 
+  computeWidgetWH, clampToBounds, withRelativeCenters,
+  rect, overlaps, overlapAmount,
+  resizeWithPush
+} from './widget-operations'
 import { NumericWidget, parseNumeric } from "./NumericWidget";
 import { parseAccelerometer } from "./AccelerometerWidget";
 
@@ -36,26 +40,26 @@ type PersistedLayoutV1<K extends string> = {
   widgets: PersistedWidget<K>[];
 };
 
-// Config-only shape (no value here)
-export type VarSpec<K extends string, Specs extends object, Props extends object> = WidgetKind<K, Specs, Props>
-
 // Runtime shape used by widget spawning
-type VarDef<K extends string, T extends object, U extends object> = VarSpec<K, T, U> & {
+type WidgetDef<K extends string, T extends object, U extends object> = WidgetSpec<K, T, U> & {
   value: number;    // stable null session value
 };
 
-type VarDefFromSpec<K extends string, T extends object, U extends object> = WidgetKind<K, T, U> & { value: number };
+type WidgetDefFromSpec<K extends string, T extends object, U extends object> = WidgetSpec<K, T, U> & { value: number };
 
 type StateFunc<T> = Dispatch<SetStateAction<T>>;
 
-export function withPlaceholderFallback<T extends WidgetKind<any, any>[]>(s: T): T & WidgetKind<'number', { }, { }>[] {
+export function withPlaceholderFallback<T extends WidgetSpecBase[]>(s: T): T | WidgetSpec<'numeric', { }, { }>[] {
   return s.length
     ? s
-    : [{ specs: { id: "0", label: "placeholder" }, kind: 'number', Component: NumericWidget, loadSpecificProps: (_)=>({ })  }] as T;
+    : [{ 
+        specs: { id: "0", label: "placeholder" }, 
+        kind: 'numeric', Component: NumericWidget, loadSpecificProps: ()=>({ })
+      }];
 }
 
 export function parseVarSpecs<
-  M extends { [K: string]: (input: Record<string, unknown>)=>VarSpec<typeof K, object, object> }
+  M extends { [K: string]: (input: Record<string, unknown>)=>WidgetSpec<typeof K, object, object> }
 >(text: string, kindParseMapping: M) {
   let raw: unknown;
   try {
@@ -71,7 +75,7 @@ export function parseVarSpecs<
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
     const obj = item as Record<string, unknown>;
-    const widgetKind = isNonEmptyString(obj.widget) ? obj.widget.trim().toLowerCase() : 'number';
+    const widgetKind = isNonEmptyString(obj.widget) ? obj.widget.trim().toLowerCase() : 'numeric';
     const parsingFn = kindParseMapping[widgetKind as keyof M];
     if(!parsingFn) continue;
     const widgetInfo = parsingFn(obj);
@@ -94,7 +98,7 @@ function parseLayout<K extends string>(raw: string | null): PersistedLayoutV1<K>
   }
 }
 
-function resolveAllOverlaps<T extends Widget<any, any>>(
+function resolveAllOverlaps<T extends WidgetBase>(
   widgets: T[],
   bounds: Size,
   lockedIds: Set<string> = new Set()
@@ -168,7 +172,7 @@ function resolveAllOverlaps<T extends Widget<any, any>>(
   return next;
 }
 
-function makeInitialWidgets<K extends string, T extends object, U extends object>(defs: VarDef<K, T, U>[], bounds: Size): Widget<K, U>[] {
+function makeInitialWidgets<K extends string, T extends object, U extends object>(defs: WidgetDef<K, T, U>[], bounds: Size): Widget<K, U>[] {
   const n = defs.length;
   const { w: baseW, h: baseH, cols } = computeWidgetWH(n, bounds);
 
@@ -207,7 +211,7 @@ function makeInitialWidgets<K extends string, T extends object, U extends object
 }
 
 function buildWidgetsFromLayout<
-  K extends string, T extends object, U extends object>(defs: VarDef<K, T, U>[], bounds: Size, layout: PersistedLayoutV1<K> | null)
+  K extends string, T extends object, U extends object>(defs: WidgetDef<K, T, U>[], bounds: Size, layout: PersistedLayoutV1<K> | null)
 {
   const base = computeWidgetWH(defs.length, bounds);
   const baseW = base.w;
@@ -416,19 +420,19 @@ const onPointerUpOrCancel = (Component: { resizeRef: RefObject<ResizeState>, dra
   Component.resizeRef.current = null;
 };
 
-type MergedKeysOf<T extends object> = Exclude<keyof T, number | symbol> | 'number' | 'accelerometer';
+type MergedKeysOf<T extends object> = Exclude<keyof T, number | symbol> | 'numeric' | 'accelerometer';
 
 export const baseParseMapping = {
-  'number': parseNumeric,
+  'numeric': parseNumeric,
   'accelerometer': parseAccelerometer
 }
 
 export function useBoardState<
-M extends { [K: string]: (input: Record<string, unknown>)=>VarSpec<MergedKeysOf<M>, any, any> }
+M extends { [K: string]: (input: Record<string, unknown>)=>WidgetSpec<MergedKeysOf<M>, any, any> }
 >(widgetKindParseMapping: M = baseParseMapping as M & typeof baseParseMapping) {
   const [initialized, setInitialized] = useState(false);
   const [varSpecs, setVarSpecs] = useState<
-    (WidgetKind<'number', {}> | WidgetKind<'accelerometer', {}> | ReturnType<M[keyof M]>)[]
+    (WidgetSpec<'numeric', {}> | WidgetSpec<'accelerometer', {}> | ReturnType<M[keyof M]>)[]
   >(() =>
     withPlaceholderFallback([])
   );
@@ -443,7 +447,9 @@ M extends { [K: string]: (input: Record<string, unknown>)=>VarSpec<MergedKeysOf<
   } as const
 }
 
-export function WidgetBoard<M extends { [K: string]: (input: Record<string, unknown>)=>VarSpec<MergedKeysOf<M>, any, any> }>({
+export function WidgetBoard<
+  M extends { [K: string]: (input: Record<string, unknown>)=>WidgetSpec<MergedKeysOf<M>, any, any> }
+>({
   containerRef, bounds, handledBoardState
 }: {
   containerRef: RefObject<HTMLDivElement | null>, 
@@ -460,11 +466,11 @@ export function WidgetBoard<M extends { [K: string]: (input: Record<string, unkn
   }
   const [varSpecs, setVarSpecs] = handledBoardState?.varSpecsState
     || useState<
-      (WidgetKind<'number', {}> | WidgetKind<'accelerometer', {}> | ReturnType<M[keyof M]>)[]
+      (WidgetSpec<'numeric', {}> | WidgetSpec<'accelerometer', {}> | ReturnType<M[keyof M]>)[]
     >(() =>
       withPlaceholderFallback([])
     );
-  const varDefs = useMemo<(VarDefFromSpec<MergedKeysOf<M>, any, any>)[]>(() => {
+  const varDefs = useMemo<(WidgetDefFromSpec<MergedKeysOf<M>, any, any>)[]>(() => {
     const specs = withPlaceholderFallback(varSpecs);
 
     return specs.map((s) => {
@@ -686,7 +692,9 @@ export function WidgetBoard<M extends { [K: string]: (input: Record<string, unkn
     });
   }, [widgets, setWidgets]);
 
-  const HandleOnResizePointerDown = useCallback((e: React.PointerEvent, id: string, dirX: ResizeDir, dirY: ResizeDir) => {
+  const HandleOnResizePointerDown = useCallback(
+    (e: React.PointerEvent, id: string, dirX: ResizeDir, dirY: ResizeDir) => 
+  {
     onResizePointerDown(e, id, dirX, dirY, {
       containerRef, 
       widgets, 

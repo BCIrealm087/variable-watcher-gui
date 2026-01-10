@@ -47,7 +47,7 @@ class SerialState:
     status: str = "idle"  # idle | connecting | connected | stopped | error
     last_error: Optional[str] = None
     last_value: Optional[Dict[str, Any]] = None
-    last_seen: Optional[float] = None
+    last_update: Optional[float] = None
     backoff_seconds: float = 1.0
 
     def to_health(self) -> Dict[str, Any]:
@@ -57,7 +57,7 @@ class SerialState:
             "status": self.status,
             "lastError": self.last_error,
             "lastValue": self.last_value,
-            "lastSeen": self.last_seen,
+            "lastUpdate": self.last_update,
             "backoffSeconds": round(self.backoff_seconds, 3),
         }
 
@@ -153,7 +153,7 @@ def _reader_loop(broadcast_fn: Callable[[str, Any], asyncio.Handle]) -> None:
                         continue
                     parsed["timestamp"] = time.time()
                     _state.last_value = parsed
-                    _state.last_seen = parsed["timestamp"]
+                    _state.last_update = parsed["timestamp"]
                     broadcast_fn("serial:update", parsed)
         except Exception as exc:  # pragma: no cover - hardware specific
             _state.status = "error"
@@ -272,6 +272,8 @@ def handle_message(data: Any, broadcast_fn: Callable[[str, Any], asyncio.Handle]
     if event:
       response = handle_command(event, event_data, broadcast_fn)
       send_message_stdout(response)
+      if response["ok"]:
+          broadcast_fn("serial:status", response["status"])
 
 def main() -> None:
     log(f"Starting extension {EXTENSION_ID}")

@@ -64,7 +64,7 @@ cd extensions/serial-input-python
 python mock_serial_generator.py --port loop:// --id demo --interval 0.5
 ```
 
-Point the UI at the same serial URL/port (default baud `115200`) and watch
+Point the UI at the same serial URL/port (default baud `57600`) and watch
 values stream into the widget board.
 
 ## How to bundle the app
